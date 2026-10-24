@@ -1,0 +1,37 @@
+{
+  "name": "tartgram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted Instagram automation by CloudTart, using official Meta APIs.",
+  "engines": {
+    "node": ">=24.0.0 <27"
+  },
+  "packageManager": "pnpm@11.13.1",
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/**\" build && pnpm -r --filter \"./apps/**\" build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:run": "pnpm -r test:run",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean",
+    "dev:gateway": "node --env-file=.env --import tsx --watch apps/gateway/src/index.ts",
+    "setup:secrets": "node scripts/generate-secrets.mjs",
+    "test:browser": "playwright test",
+    "preview:local": "node scripts/preview.mjs",
+    "start": "node --env-file=.env apps/gateway/dist/index.js",
+    "format": "prettier --write apps packages scripts tests *.json *.yaml *.ts",
+    "format:check": "prettier --check apps packages scripts tests *.json *.yaml *.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.10.2",
+    "prettier": "^3.9.10",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.5"
+  },
+  "license": "CPAL-1.0"
+}

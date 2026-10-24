@@ -1,0 +1,5 @@
+{$PUBLIC_HOST} {
+    reverse_proxy gateway:8080
+    # Access logs are intentionally disabled: OAuth codes and verification
+    # tokens must not appear in URL logs. Enable only with explicit redaction.
+}

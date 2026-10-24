@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-950 text-cream-100 font-sans antialiased;
+    /* Warm atmospheric background: two soft glows over near-black, plus a faint grain. */
+    background-image:
+      radial-gradient(
+        60rem 40rem at 92% -10%,
+        rgba(255, 106, 61, 0.13),
+        transparent 60%
+      ),
+      radial-gradient(
+        50rem 40rem at 0% 108%,
+        rgba(237, 176, 18, 0.08),
+        transparent 55%
+      );
+    background-attachment: fixed;
+  }
+
+  /* Fine grain overlay for texture */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  ::selection {
+    background: rgba(255, 106, 61, 0.3);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3d342a;
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4e4336;
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-ink-700/60 bg-ink-900/70 shadow-panel backdrop-blur-sm;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-ink-700 bg-ink-850 px-2.5 py-1 text-xs text-cream-300;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-coral-500/60 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-coral-500 text-ink-950 hover:bg-coral-400 hover:shadow-glow active:translate-y-px;
+  }
+  .btn-ghost {
+    @apply btn border border-ink-700 bg-ink-850/60 text-cream-100 hover:border-ink-600 hover:bg-ink-800;
+  }
+  .field {
+    @apply w-full rounded-xl border border-ink-700 bg-ink-950/60 px-3.5 py-2.5 text-sm text-cream-50 placeholder:text-ink-600 focus:border-coral-500/70 focus:outline-none focus:ring-2 focus:ring-coral-500/25;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium text-sand;
+  }
+}
+
+/* Keep control panels readable in both writing directions and at narrow widths. */
+.panel,
+.field,
+.grid > * {
+  min-width: 0;
+}
+.panel {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .field {
+    font-size: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

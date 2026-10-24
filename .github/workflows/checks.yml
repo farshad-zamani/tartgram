@@ -1,0 +1,46 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  code:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: {version: 11.13.1}
+      - uses: actions/setup-node@v4
+        with: {node-version: 24, cache: pnpm}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm test:run
+      - run: pnpm build
+      - run: pnpm audit
+      - run: node scripts/check-public.mjs
+      - if: runner.os == 'Linux'
+        run: pnpm exec playwright install --with-deps chromium
+      - if: runner.os == 'Linux'
+        run: pnpm test:browser
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with: {name: interface-samples, path: docs/screenshots/*.png}
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag tartgram:test .
+      - uses: actions/setup-node@v4
+        with: {node-version: 24}
+      - run: node scripts/container-smoke.mjs tartgram:test
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

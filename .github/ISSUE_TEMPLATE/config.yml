@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup guide
+    url: https://github.com/farshad-zamani/tartgram/blob/main/docs/meta-setup.md
+    about: Read the official Meta setup and approval steps first.

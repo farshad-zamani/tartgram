@@ -1,0 +1,22 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# esbuild (used by tsup/vitest) ships a native binary via a postinstall script.
+allowBuilds:
+  esbuild: true
+
+# Security fixes, scoped to the existing dependency major where possible.
+overrides:
+  "fast-uri@3": "^3.1.9"
+  "fast-uri@4": "^4.2.3"
+  find-my-way: "^9.10.0"
+  brace-expansion: "^5.0.12"
+  "@fastify/busboy": "^3.2.4"
+  postcss: "^8.5.31"
+  "nanoid@3": "^3.3.18"
+  browserslist: "^4.28.7"
+  baseline-browser-mapping: "^2.11.0"
+  source-map-js: "^1.2.2"
+  postcss-selector-parser: "^7.1.6"
+  esbuild: "^0.28.1"
