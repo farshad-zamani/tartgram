@@ -116,8 +116,8 @@ export const zButton = z.object({
 export type Button = z.infer<typeof zButton>;
 
 export const zQuickReply = z.object({
-  title: z.string(),
-  payload: z.string(),
+  title: z.string().min(1).max(20),
+  payload: z.string().min(1).max(1000),
 });
 export type QuickReply = z.infer<typeof zQuickReply>;
 
@@ -140,7 +140,7 @@ export const zMessageContent = z.discriminatedUnion("type", [
         (v) => new TextEncoder().encode(v).length <= 1000,
         "Maximum 1000 UTF-8 bytes.",
       ),
-    quickReplies: z.array(zQuickReply).default([]),
+    quickReplies: z.array(zQuickReply).max(13).default([]),
   }),
   z.object({ type: z.literal("image"), url: z.string().url() }),
   z.object({ type: z.literal("cards"), cards: z.array(zCard) }),

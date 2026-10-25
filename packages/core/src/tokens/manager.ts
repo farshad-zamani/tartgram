@@ -1,4 +1,5 @@
 import { OAUTH_REFRESH_TOKEN_URL, TIMING, type Account } from "@app/shared";
+import { GraphApiError } from "../graph/errors.js";
 import {
   systemClock,
   type Clock,
@@ -46,6 +47,8 @@ export class TokenManager {
     if (!current) {
       throw new Error(`No stored token for account ${account.id}`);
     }
+    if (account.tokenExpiresAt && account.tokenExpiresAt <= this.clock.now())
+      throw new Error("Authorization expired. Reconnect the account.");
 
     if (this.shouldRefresh(account)) {
       // Only Instagram-Login long-lived tokens are self-refreshable via this endpoint.
@@ -57,10 +60,13 @@ export class TokenManager {
             this.clock.now() + refreshed.expiresInSeconds * 1000;
           await onRefreshed?.(expiresAt);
           return refreshed.token;
-        } catch (err) {
+        } catch (error) {
+          if (error instanceof GraphApiError && error.isTokenExpired) {
+            await this.store.delete(account.accessTokenRef);
+            throw new Error("Authorization revoked. Reconnect the account.");
+          }
           this.logger?.warn("Token refresh failed; using existing token", {
             accountId: account.id,
-            error: err instanceof Error ? err.message : String(err),
           });
         }
       }
@@ -83,21 +89,36 @@ export class TokenManager {
     url.searchParams.set("grant_type", "ig_refresh_token");
     url.searchParams.set("access_token", currentToken);
 
-    const res = await this.fetchImpl(url);
+    const res = await this.fetchImpl(url, {
+      signal: AbortSignal.timeout(20_000),
+    });
     const json = (await res.json().catch(() => ({}))) as {
       access_token?: string;
       expires_in?: number;
-      error?: { message?: string };
+      error?: { code?: number };
     };
-    if (!res.ok || !json.access_token) {
+    if (!res.ok || json?.error)
+      throw new GraphApiError({
+        message: "Meta rejected the token refresh.",
+        httpStatus: res.status,
+        code: json?.error?.code,
+      });
+    if (
+      !res.ok ||
+      json?.error ||
+      typeof json?.access_token !== "string" ||
+      !json.access_token.trim() ||
+      typeof json.expires_in !== "number" ||
+      !Number.isFinite(json.expires_in) ||
+      json.expires_in <= 0
+    ) {
       throw new Error(
-        json.error?.message ?? `Token refresh failed (HTTP ${res.status})`,
+        "Meta did not return a valid refreshed token and expiry.",
       );
     }
     return {
       token: json.access_token,
-      expiresInSeconds:
-        json.expires_in ?? TIMING.longLivedTokenDays * 24 * 60 * 60,
+      expiresInSeconds: json.expires_in,
     };
   }
 }

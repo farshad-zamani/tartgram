@@ -39,7 +39,7 @@ export type {
   ConversationSummary,
   ConversationMessage,
 } from "./graph/client.js";
-export { GraphApiError } from "./graph/errors.js";
+export { GraphApiError, PublicationUncertainError } from "./graph/errors.js";
 export {
   buildMessagePayload,
   isWithinTextLimit,

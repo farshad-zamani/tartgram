@@ -20,7 +20,12 @@ const json = (v: unknown, status = 200) =>
     headers: { "content-type": "application/json" },
   });
 function mockUnified(
-  overrides: { scopes?: string[]; subscriptionFailed?: boolean } = {},
+  overrides: {
+    scopes?: string[];
+    subscriptionFailed?: boolean;
+    info?: Record<string, unknown>;
+    page?: (url: URL) => unknown;
+  } = {},
 ) {
   return vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -34,17 +39,22 @@ function mockUnified(
           user_id: "subject",
           scopes: overrides.scopes ?? UNIFIED_SCOPES,
           expires_at: 0,
+          ...overrides.info,
         },
       });
     if (url.pathname.endsWith("/me"))
       return json({ id: "subject", client_business_id: "business" });
     if (url.pathname.endsWith("/me/assigned_instagram_accounts"))
-      return json({
-        data: [
-          { id: "111", username: "example_shop" },
-          { id: "222", username: "example_studio" },
-        ],
-      });
+      return json(
+        overrides.page
+          ? overrides.page(url)
+          : {
+              data: [
+                { id: "111", username: "example_shop" },
+                { id: "222", username: "example_studio" },
+              ],
+            },
+      );
     if (url.pathname.endsWith("/subscribed_apps"))
       return overrides.subscriptionFailed
         ? json({ error: { code: 10 } }, 403)
@@ -55,6 +65,158 @@ function mockUnified(
   });
 }
 describe("official Meta authorization", () => {
+  it("refreshes a legacy token only once across concurrent requests", async () => {
+    const c = testConfig();
+    await seedAccount(c, "legacy", {
+      loginMethod: "instagram_login",
+      tokenType: "instagram_user",
+      expiresAt: Date.now() + 86400_000,
+      refreshAfter: Date.now() - 1,
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        json({ access_token: "fresh-token", expires_in: 123456 }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const store = new JsonAccountStore(c.accountsFile, c.tokenEncryptionKey);
+    expect(
+      await Promise.all(
+        Array.from({ length: 8 }, () => tokenFor(store, "legacy")),
+      ),
+    ).toEqual(Array(8).fill("fresh-token"));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect((await store.load())[0]?.expiresAt).toBeGreaterThan(
+      Date.now() + 123450_000,
+    );
+  });
+  it("stops using a token when Meta rejects its refresh as revoked", async () => {
+    const c = testConfig();
+    await seedAccount(c, "legacy", {
+      loginMethod: "instagram_login",
+      tokenType: "instagram_user",
+      expiresAt: Date.now() + 86400_000,
+      refreshAfter: Date.now() - 1,
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(json({ error: { code: 190 } }, 400));
+    vi.stubGlobal("fetch", fetcher);
+    const store = new JsonAccountStore(c.accountsFile, c.tokenEncryptionKey);
+    await expect(tokenFor(store, "legacy")).rejects.toThrow("revoked");
+    await expect(tokenFor(store, "legacy")).rejects.toThrow("Reconnect");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect((await store.load())[0]?.reconnectRequired).toBe(true);
+  });
+  const unifiedConfig = () =>
+    testConfig({
+      metaAppId: "100",
+      metaAppSecret: "test-app-secret",
+      metaConfigId: "200",
+    });
+  it("uses cursor pagination without following remote paging URLs and removes duplicate accounts", async () => {
+    const fetcher = mockUnified({
+      page: (url) =>
+        url.searchParams.get("after")
+          ? {
+              data: [
+                { id: "111", username: "example_shop" },
+                { id: "222", username: "studio" },
+              ],
+            }
+          : {
+              data: [{ id: "111", username: "example_shop" }],
+              paging: {
+                next: "https://untrusted.example/steal",
+                cursors: { after: "next-page" },
+              },
+            },
+    });
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      (await connectAccounts(unifiedConfig(), "code")).map((a) => a.igId),
+    ).toEqual(["111", "222"]);
+    expect(
+      fetcher.mock.calls.every(
+        ([url]) => new URL(String(url)).hostname === "graph.facebook.com",
+      ),
+    ).toBe(true);
+  });
+  it.each([{}, { cursors: {} }, { cursors: { after: "" } }])(
+    "rejects an advertised next page without a usable cursor",
+    async (paging) => {
+      vi.stubGlobal(
+        "fetch",
+        mockUnified({
+          page: () => ({
+            data: [{ id: "111", username: "shop" }],
+            paging: { ...paging, next: "next" },
+          }),
+        }),
+      );
+      await expect(connectAccounts(unifiedConfig(), "code")).rejects.toThrow(
+        "pagination",
+      );
+    },
+  );
+  it("terminates repeated cursors even when pages are empty", async () => {
+    const fetcher = mockUnified({
+      page: () => ({
+        data: [],
+        paging: { next: "next", cursors: { after: "same" } },
+      }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(connectAccounts(unifiedConfig(), "code")).rejects.toThrow(
+      "pagination",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+  it("bounds pagination even when every response advertises a new cursor", async () => {
+    let i = 0;
+    const fetcher = mockUnified({
+      page: () => ({
+        data: [],
+        paging: { next: "next", cursors: { after: `page-${++i}` } },
+      }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await expect(connectAccounts(unifiedConfig(), "code")).rejects.toThrow(
+      "Too many",
+    );
+    expect(i).toBe(10);
+  });
+  it.each([null, {}, { id: "111" }, { id: "", username: "shop" }])(
+    "rejects incomplete assigned account profiles: %j",
+    async (profile) => {
+      vi.stubGlobal(
+        "fetch",
+        mockUnified({ page: () => ({ data: [profile] }) }),
+      );
+      await expect(connectAccounts(unifiedConfig(), "code")).rejects.toThrow(
+        "incomplete account",
+      );
+    },
+  );
+  it.each([{ expires_at: 1 }, { expires_at: "0" }, { expires_at: -1 }])(
+    "rejects expired or malformed token metadata: %j",
+    async (info) => {
+      vi.stubGlobal("fetch", mockUnified({ info }));
+      await expect(connectAccounts(unifiedConfig(), "code")).rejects.toThrow();
+    },
+  );
+  it("keeps the earlier real authorization or data-access expiry", async () => {
+    const earlier = Math.floor(Date.now() / 1000) + 7200;
+    vi.stubGlobal(
+      "fetch",
+      mockUnified({
+        info: { expires_at: earlier + 7200, data_access_expires_at: earlier },
+      }),
+    );
+    expect((await connectAccounts(unifiedConfig(), "code"))[0]?.expiresAt).toBe(
+      earlier * 1000,
+    );
+  });
   it("stops calling Meta with a revoked shared authorization until reconnection", async () => {
     const c = testConfig();
     await seedAccount(c, "first");

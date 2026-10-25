@@ -67,8 +67,10 @@ export class JsonFile<T> {
     return serialized(this.path ?? this.memoryKey, operation);
   }
   async replace(value: T): Promise<void> {
-    if (this.path)
-      await serialized(this.path, () => atomicJson(this.path!, value));
-    else this.memory = structuredClone(value);
+    const copy = structuredClone(value);
+    await serialized(this.path ?? this.memoryKey, async () => {
+      if (this.path) await atomicJson(this.path, copy);
+      else this.memory = copy;
+    });
   }
 }

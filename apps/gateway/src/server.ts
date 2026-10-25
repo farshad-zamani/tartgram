@@ -341,9 +341,16 @@ export async function buildServer(
     return reply.send({ received });
   });
   async function deleteSubject(subject: string) {
-    const matching = (await accounts.load()).filter(
-      (a) => a.authorizationSubjectId === subject,
-    );
+    const all = await accounts.load();
+    const matching = all.filter((a) => a.authorizationSubjectId === subject);
+    // A Unified business system user is not the person who authorized the app.
+    // Never claim that a person's callback removed data when that mapping is unavailable.
+    if (!matching.length && all.length) {
+      app.log.warn(
+        "A signed privacy request needs operator review: authorization subject could not be mapped.",
+      );
+      throw new Error("Privacy request requires operator review.");
+    }
     for (const account of matching)
       await purgeAccount(config, account.igId, stores);
   }
@@ -387,7 +394,7 @@ export async function buildServer(
   app.get("/privacy/data-deletion/status", async (req, reply) => {
     const code = (req.query as { code?: string }).code,
       status = code ? (await deletions.read())[code] : undefined;
-    if (!status)
+    if (!status || Date.now() - status.createdAt > 30 * 86400_000)
       return reply
         .code(404)
         .type("text/html")

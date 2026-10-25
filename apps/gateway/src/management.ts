@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { open, unlink } from "node:fs/promises";
+import { open, unlink, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { zAutomation, zFlow, zIceBreaker, TIMING } from "@app/shared";
+import { PublicationUncertainError } from "@app/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { oauthReady, type GatewayConfig } from "./config.js";
 import { JsonAccountStore } from "./account-store.js";
@@ -25,6 +26,7 @@ import type { JsonCommentStore } from "./comments-store.js";
 import { purgeAccount, type UploadRecord } from "./lifecycle.js";
 import { accountLock } from "./operations.js";
 import { scopesFor } from "./oauth.js";
+import { validFlow } from "./flow-validation.js";
 const text = z
   .string()
   .min(1)
@@ -119,10 +121,13 @@ export async function registerManagementApi(
       tokenExpiresAt: a.expiresAt,
       loginMethod: a.loginMethod,
       subscriptionStatus: a.subscriptionStatus,
-      reconnectRequired: a.reconnectRequired,
+      reconnectRequired: Boolean(
+        a.reconnectRequired || (a.expiresAt && a.expiresAt <= Date.now()),
+      ),
     })),
-    automationsCount: (await loadAutomationsFile(c.automationsFile)).automations
-      .length,
+    automationsCount: (
+      await loadAutomationsFile(c.automationsFile)
+    ).automations.filter((a) => a.enabled).length,
     ...(await settings.read()),
     setup: {
       loginMode: c.metaLoginMode,
@@ -160,7 +165,9 @@ export async function registerManagementApi(
       tokenExpiresAt: a.expiresAt,
       loginMethod: a.loginMethod,
       subscriptionStatus: a.subscriptionStatus,
-      reconnectRequired: a.reconnectRequired,
+      reconnectRequired: Boolean(
+        a.reconnectRequired || (a.expiresAt && a.expiresAt <= Date.now()),
+      ),
     })),
   );
   app.delete("/api/accounts/:igId", async (req) => {
@@ -261,6 +268,7 @@ export async function registerManagementApi(
           recipientId: z.string().min(1),
           text,
           humanAgent: z.boolean().optional(),
+          replyToMid: z.string().min(1).max(1000).optional(),
         })
         .safeParse(req.body);
     if (!p.success) return invalid(reply);
@@ -278,7 +286,10 @@ export async function registerManagementApi(
       const result = await (await clientFor(igId))!.sendMessage(
         p.data.recipientId,
         { type: "text", text: p.data.text, quickReplies: [] },
-        p.data.humanAgent ? { tag: "HUMAN_AGENT" } : undefined,
+        {
+          ...(p.data.humanAgent ? { tag: "HUMAN_AGENT" as const } : {}),
+          replyToMid: p.data.replyToMid,
+        },
       );
       return { ok: true, messageId: result.message_id };
     } catch {
@@ -294,7 +305,11 @@ export async function registerManagementApi(
       ).data?.[0];
       if (
         typeof row?.quota_usage !== "number" ||
-        typeof row.config?.quota_total !== "number"
+        !Number.isFinite(row.quota_usage) ||
+        row.quota_usage < 0 ||
+        typeof row.config?.quota_total !== "number" ||
+        !Number.isFinite(row.config.quota_total) ||
+        row.config.quota_total < 0
       )
         return reply.code(502).send({ error: "quota_unavailable" });
       return { used: row.quota_usage, total: row.config.quota_total };
@@ -324,6 +339,20 @@ export async function registerManagementApi(
         .safeParse(req.body);
     if (!p.success) return invalid(reply);
     const { type, url, caption, scheduleAt } = p.data;
+    const source = new URL(url);
+    if (
+      source.origin === new URL(c.publicUrl).origin &&
+      source.pathname.startsWith("/uploads/")
+    ) {
+      const name = source.pathname.slice("/uploads/".length);
+      if (
+        !(await uploads.read()).some(
+          (u) => u.name === name && u.accountId === igId,
+        ) ||
+        !existsSync(join(c.uploadsDir, name))
+      )
+        return reply.code(400).send({ error: "upload_not_owned_or_missing" });
+    }
     if (scheduleAt) {
       if (scheduleAt <= Date.now() + 5000)
         return reply.code(400).send({ error: "schedule_in_past" });
@@ -340,13 +369,42 @@ export async function registerManagementApi(
       await scheduled.add(post);
       return { scheduled: true, post };
     }
+    const post = {
+      id: randomUUID(),
+      igId,
+      type,
+      url,
+      caption,
+      scheduleAt: Date.now(),
+      createdAt: Date.now(),
+      status: "publishing" as const,
+    };
+    await scheduled.add(post);
+    let mediaId: string;
+    const client = (await clientFor(igId))!;
     try {
-      const client = (await clientFor(igId))!,
-        mediaId = await publishNow(client, type, url, caption);
-      return { published: true, mediaId, warnings: client.publishWarnings };
-    } catch {
+      mediaId = await publishNow(client, type, url, caption);
+    } catch (error) {
+      const uncertain = error instanceof PublicationUncertainError;
+      await scheduled.update(post.id, {
+        status: uncertain ? "uncertain" : "failed",
+        containerId: uncertain ? error.containerId : undefined,
+        error: uncertain
+          ? error.message
+          : "Publishing failed. Check permissions, quota and media requirements.",
+      });
+      if (uncertain)
+        return reply
+          .code(409)
+          .send({ error: "publish_outcome_unknown", postId: post.id });
       return remoteError(reply);
     }
+    await scheduled.update(post.id, {
+      status: "published",
+      publishedMediaId: mediaId,
+      warnings: client.publishWarnings,
+    });
+    return { published: true, mediaId, warnings: client.publishWarnings };
   });
   app.post("/api/accounts/:igId/upload", async (req, reply) => {
     const { igId } = req.params as { igId: string },
@@ -360,17 +418,18 @@ export async function registerManagementApi(
       return reply.code(415).send({ error: "jpeg_or_mp4_required" });
     }
     const name = randomUUID() + ext,
-      dest = join(c.uploadsDir, name);
+      dest = join(c.uploadsDir, name),
+      staging = join(c.uploadsDir, `.pending-${name}`);
     try {
       await pipeline(
         file.file,
-        createWriteStream(dest, { flags: "wx", mode: 0o600 }),
+        createWriteStream(staging, { flags: "wx", mode: 0o600 }),
       );
       if (file.file.truncated) {
-        await unlink(dest);
+        await unlink(staging);
         return reply.code(413).send({ error: "file_too_large" });
       }
-      const handle = await open(dest, "r"),
+      const handle = await open(staging, "r"),
         head = Buffer.alloc(12);
       try {
         await handle.read(head, 0, 12, 0);
@@ -382,9 +441,10 @@ export async function registerManagementApi(
           ? head[0] === 255 && head[1] === 216 && head[2] === 255
           : head.subarray(4, 8).toString() === "ftyp";
       if (!valid) {
-        await unlink(dest);
+        await unlink(staging);
         return reply.code(415).send({ error: "file_content_mismatch" });
       }
+      await rename(staging, dest);
       await uploads.update((rows) => {
         rows.push({
           name,
@@ -394,8 +454,14 @@ export async function registerManagementApi(
         });
       });
       return { url: `${base}/uploads/${name}`, mime: file.mimetype };
-    } catch {
+    } catch (error) {
+      await unlink(staging).catch(() => {});
       await unlink(dest).catch(() => {});
+      if (
+        file.file.truncated ||
+        (error as { code?: string }).code === "FST_REQ_FILE_TOO_LARGE"
+      )
+        return reply.code(413).send({ error: "file_too_large" });
       return reply.code(500).send({ error: "upload_failed" });
     }
   });
@@ -453,7 +519,7 @@ export async function registerManagementApi(
     }
     return { ok: true, eligible: audience.length, sent };
   });
-  app.get("/api/accounts/:igId/comments", async (req) => {
+  app.get("/api/accounts/:igId/comments", async (req, reply) => {
     const { igId } = req.params as { igId: string },
       stored = await comments.list(igId),
       byId = new Map(stored.map((c) => [c.id, c]));
@@ -476,6 +542,9 @@ export async function registerManagementApi(
             });
     } catch {
       app.log.warn("Recent comments could not be synchronized.");
+      return reply
+        .code(502)
+        .send({ error: "comment_sync_failed", cached: stored });
     }
     return [...byId.values()].sort((a, b) => b.timestamp - a.timestamp);
   });
@@ -553,35 +622,47 @@ export async function registerManagementApi(
     if (!p.success) return invalid(reply);
     const accountIds = new Set((await accounts.load()).map((a) => a.igId));
     if (
+      new Set(p.data.automations.map((a) => a.id)).size !==
+        p.data.automations.length ||
+      p.data.automations.some((a) => !a.id || a.id.startsWith("ibauto:"))
+    )
+      return invalid(reply);
+    if (
       p.data.automations.some(
         (a) => !accountIds.has(a.accountId) || a.trigger.kind === "welcome",
       )
     )
       return invalid(reply);
-    for (const [id, flows] of Object.entries(p.data.flows))
+    for (const [id, flows] of Object.entries(p.data.flows)) {
+      if (new Set(flows.map((f) => f.id)).size !== flows.length)
+        return invalid(reply);
       for (const flow of flows) {
-        const ids = new Set(flow.nodes.map((n) => n.id));
         if (
           !accountIds.has(id) ||
-          flow.nodes.some((n) => n.kind === "delay") ||
-          ids.size !== flow.nodes.length ||
-          !ids.has(flow.startNodeId) ||
-          p.data.automations.some(
-            (a) => a.flowId === flow.id && a.accountId !== id,
-          )
+          flow.id.startsWith("ibflow:") ||
+          !validFlow(flow)
         )
           return invalid(reply);
       }
+    }
     for (const a of p.data.automations)
       if (!p.data.flows[a.accountId]?.some((f) => f.id === a.flowId))
         return invalid(reply);
-    await serialized(c.automationsFile, async () => {
+    const saved = await serialized(c.automationsFile, async () => {
       const old = await loadAutomationsFile(c.automationsFile);
+      if (
+        p.data.iceBreakers &&
+        JSON.stringify(p.data.iceBreakers) !== JSON.stringify(old.iceBreakers)
+      )
+        return false;
       await saveAutomationsFile(c.automationsFile, {
         ...p.data,
-        iceBreakers: p.data.iceBreakers ?? old.iceBreakers,
+        iceBreakers: old.iceBreakers,
       });
+      return true;
     });
+    if (!saved)
+      return reply.code(400).send({ error: "use_ice_breakers_endpoint" });
     return { ok: true, automationsCount: p.data.automations.length };
   });
   app.get(
@@ -596,7 +677,7 @@ export async function registerManagementApi(
       p = z
         .array(
           z.object({
-            id: z.string().optional(),
+            id: z.string().min(1).max(100).optional(),
             question: z.string().min(1).max(80),
             response: text,
           }),
@@ -606,6 +687,17 @@ export async function registerManagementApi(
     if (!p.success) return invalid(reply);
     const items = p.data.map((i) => ({ ...i, id: i.id ?? randomUUID() })),
       client = (await clientFor(igId))!;
+    const current = await loadAutomationsFile(c.automationsFile);
+    const otherIds = new Set(
+      Object.entries(current.iceBreakers)
+        .filter(([id]) => id !== igId)
+        .flatMap(([, rows]) => rows.map((row) => row.id)),
+    );
+    if (
+      new Set(items.map((i) => i.id)).size !== items.length ||
+      items.some((i) => otherIds.has(i.id))
+    )
+      return invalid(reply);
     try {
       if (items.length)
         await client.setIceBreakers(
@@ -633,25 +725,27 @@ export async function registerManagementApi(
   });
   app.addHook("onClose", stop);
   async function cleanUploads() {
-    const posts = await scheduled.load();
-    await uploads.update(async (rows) => {
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const row = rows[i]!;
-        if (
-          Date.now() - row.createdAt < 7 * 86400_000 ||
-          posts.some(
-            (p) =>
-              ["pending", "publishing"].includes(p.status) &&
-              p.url === `${base}/uploads/${row.name}`,
+    return serialized(c.accountsFile + "#workspace-write", async () => {
+      const posts = await scheduled.load();
+      await uploads.update(async (rows) => {
+        for (let i = rows.length - 1; i >= 0; i--) {
+          const row = rows[i]!;
+          if (
+            Date.now() - row.createdAt < 7 * 86400_000 ||
+            posts.some(
+              (p) =>
+                ["pending", "publishing", "uncertain"].includes(p.status) &&
+                p.url === `${base}/uploads/${row.name}`,
+            )
           )
-        )
-          continue;
-        if (/^[a-f0-9-]+\.(jpg|mp4)$/.test(row.name))
-          await unlink(join(c.uploadsDir, row.name)).catch((e) => {
-            if (e.code !== "ENOENT") throw e;
-          });
-        rows.splice(i, 1);
-      }
+            continue;
+          if (/^[a-f0-9-]+\.(jpg|mp4)$/.test(row.name))
+            await unlink(join(c.uploadsDir, row.name)).catch((e) => {
+              if (e.code !== "ENOENT") throw e;
+            });
+          rows.splice(i, 1);
+        }
+      });
     });
   }
   await cleanUploads();

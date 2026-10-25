@@ -4,7 +4,7 @@ import {
   type MessageContent,
 } from "@app/shared";
 import type { InstagramApi, Logger, UserProfile } from "../ports.js";
-import { GraphApiError } from "./errors.js";
+import { GraphApiError, PublicationUncertainError } from "./errors.js";
 import { buildMessagePayload } from "./message.js";
 
 export interface GraphClientOptions {
@@ -84,7 +84,7 @@ export class GraphClient implements InstagramApi {
   async sendMessage(
     recipientIgsid: string,
     content: MessageContent,
-    opts?: { tag?: MessagingTag },
+    opts?: { tag?: MessagingTag; replyToMid?: string },
   ): Promise<{ recipient_id?: string; message_id?: string }> {
     const body: Record<string, unknown> = {
       recipient: { id: recipientIgsid },
@@ -94,7 +94,11 @@ export class GraphClient implements InstagramApi {
       body["messaging_type"] = "MESSAGE_TAG";
       body["tag"] = opts.tag;
     }
-    return this.request("POST", `${this.igUserId}/messages`, { body });
+    if (opts?.replyToMid) body["reply_to"] = { mid: opts.replyToMid };
+    return this.request("POST", `${this.igUserId}/messages`, {
+      body,
+      expect: "message_id",
+    });
   }
 
   /**
@@ -109,7 +113,10 @@ export class GraphClient implements InstagramApi {
       recipient: { comment_id: commentId },
       message: buildMessagePayload(content),
     };
-    return this.request("POST", `${this.igUserId}/messages`, { body });
+    return this.request("POST", `${this.igUserId}/messages`, {
+      body,
+      expect: "message_id",
+    });
   }
 
   /** Post a public reply under a comment. */
@@ -119,6 +126,7 @@ export class GraphClient implements InstagramApi {
   ): Promise<{ id?: string }> {
     return this.request("POST", `${encodeURIComponent(commentId)}/replies`, {
       body: { message: text },
+      expect: "id",
     });
   }
 
@@ -129,12 +137,15 @@ export class GraphClient implements InstagramApi {
   ): Promise<{ success?: boolean }> {
     return this.request("POST", encodeURIComponent(commentId), {
       query: { hide: String(hide) },
+      expect: "success",
     });
   }
 
   /** Delete a comment. */
   async deleteComment(commentId: string): Promise<{ success?: boolean }> {
-    return this.request("DELETE", encodeURIComponent(commentId));
+    return this.request("DELETE", encodeURIComponent(commentId), {
+      expect: "success",
+    });
   }
 
   /** Look up a conversation participant's profile (enables follow-gating). */
@@ -153,6 +164,7 @@ export class GraphClient implements InstagramApi {
   }> {
     return this.request("GET", `${this.igUserId}/content_publishing_limit`, {
       query: { fields: "quota_usage,config" },
+      expect: "data",
     });
   }
 
@@ -162,14 +174,31 @@ export class GraphClient implements InstagramApi {
   async createMediaContainer(
     params: Record<string, string>,
   ): Promise<{ id?: string }> {
-    return this.request("POST", `${this.igUserId}/media`, { query: params });
+    return this.request("POST", `${this.igUserId}/media`, {
+      query: params,
+      expect: "id",
+    });
   }
 
   /** Publish a previously created container (step 2). */
   async publishMedia(creationId: string): Promise<{ id?: string }> {
-    return this.request("POST", `${this.igUserId}/media_publish`, {
-      query: { creation_id: creationId },
-    });
+    try {
+      const result = await this.request<{ id?: string }>(
+        "POST",
+        `${this.igUserId}/media_publish`,
+        {
+          query: { creation_id: creationId },
+        },
+      );
+      if (typeof result.id !== "string" || !result.id)
+        throw new PublicationUncertainError(creationId);
+      return result;
+    } catch (error) {
+      if (error instanceof PublicationUncertainError) throw error;
+      if (error instanceof GraphApiError && error.httpStatus >= 500)
+        throw new PublicationUncertainError(creationId);
+      throw error;
+    }
   }
 
   /** Container processing status (for video/reel which process asynchronously). */
@@ -184,7 +213,7 @@ export class GraphClient implements InstagramApi {
   /** Poll a container until it is FINISHED (throws on ERROR/EXPIRED or timeout). */
   private async waitForContainer(
     containerId: string,
-    maxMs = 150_000,
+    maxMs = 300_000,
   ): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < maxMs) {
@@ -196,7 +225,7 @@ export class GraphClient implements InstagramApi {
           httpStatus: 400,
         });
       }
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 60_000));
     }
     throw new GraphApiError({
       message: "Container processing timed out",
@@ -266,6 +295,7 @@ export class GraphClient implements InstagramApi {
           "id,updated_time,participants,messages.limit(1){message,from,created_time}",
         limit: String(limit),
       },
+      expect: "data",
     });
   }
 
@@ -278,6 +308,7 @@ export class GraphClient implements InstagramApi {
       query: {
         fields: `messages.limit(${limit}){id,created_time,from,message}`,
       },
+      expect: "messages",
     });
   }
 
@@ -292,6 +323,7 @@ export class GraphClient implements InstagramApi {
           { locale: "default", call_to_actions: items.slice(0, 4) },
         ],
       },
+      expect: "success",
     });
   }
 
@@ -299,6 +331,7 @@ export class GraphClient implements InstagramApi {
   async getIceBreakers(): Promise<{ data?: { ice_breakers?: unknown }[] }> {
     return this.request("GET", `${this.igUserId}/messenger_profile`, {
       query: { fields: "ice_breakers" },
+      expect: "data",
     });
   }
 
@@ -306,6 +339,7 @@ export class GraphClient implements InstagramApi {
   async deleteIceBreakers(): Promise<Record<string, unknown>> {
     return this.request("DELETE", `${this.igUserId}/messenger_profile`, {
       body: { fields: ["ice_breakers"] },
+      expect: "success",
     });
   }
 
@@ -317,6 +351,7 @@ export class GraphClient implements InstagramApi {
           "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,comments_count",
         limit: String(limit),
       },
+      expect: "data",
     });
   }
 
@@ -338,13 +373,18 @@ export class GraphClient implements InstagramApi {
         fields: "id,text,username,timestamp,hidden",
         limit: String(limit),
       },
+      expect: "data",
     });
   }
 
   private async request<T = Record<string, unknown>>(
     method: "GET" | "POST" | "DELETE",
     path: string,
-    opts?: { query?: Record<string, string>; body?: unknown },
+    opts?: {
+      query?: Record<string, string>;
+      body?: unknown;
+      expect?: "data" | "messages" | "id" | "message_id" | "success";
+    },
   ): Promise<T> {
     const token = await this.getToken();
     const url = new URL(`${this.baseUrl}/${this.version}/${path}`);
@@ -361,8 +401,16 @@ export class GraphClient implements InstagramApi {
       init.body = JSON.stringify(opts.body);
     }
 
-    const res = await this.fetchImpl(url, init);
-    const text = await res.text();
+    let res: Response, text: string;
+    try {
+      res = await this.fetchImpl(url, init);
+      text = await res.text();
+    } catch {
+      throw new GraphApiError({
+        message: "Meta API connection failed or timed out.",
+        httpStatus: 503,
+      });
+    }
     let json: unknown = undefined;
     if (text) {
       try {
@@ -393,6 +441,30 @@ export class GraphClient implements InstagramApi {
         type:
           typeof err["type"] === "string" ? (err["type"] as string) : undefined,
       });
+    }
+
+    if (!json || typeof json !== "object" || Array.isArray(json))
+      throw new GraphApiError({
+        message: "Meta returned an invalid response.",
+        httpStatus: 502,
+      });
+    if (opts?.expect) {
+      const value = (json as Record<string, unknown>)[opts.expect];
+      const valid =
+        opts.expect === "data"
+          ? Array.isArray(value)
+          : opts.expect === "messages"
+            ? !!value &&
+              typeof value === "object" &&
+              Array.isArray((value as { data?: unknown }).data)
+            : opts.expect === "success"
+              ? value === true
+              : typeof value === "string" && value.length > 0;
+      if (!valid)
+        throw new GraphApiError({
+          message: "Meta returned an incomplete response.",
+          httpStatus: 502,
+        });
     }
 
     if (path.endsWith("/media_publish")) {

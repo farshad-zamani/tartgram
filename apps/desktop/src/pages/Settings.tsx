@@ -36,19 +36,33 @@ export function Settings({ status }: { status: Status }) {
   const { t, lang, setLang } = useI18n();
   const [copied, setCopied] = useState(false);
   const [defAcc, setDefAcc] = useState(defaultIg(status));
+  const [error, setError] = useState(false);
+  const [saving, setSaving] = useState(false);
   const endpoint = new URL(status.setup.webhookUrl).origin;
 
   async function changeDefault(id: string) {
-    setDefAcc(id);
-    await api.saveDefaultAccount(id);
-    window.location.reload();
+    setSaving(true);
+    setError(false);
+    try {
+      await api.saveDefaultAccount(id);
+      setDefAcc(id);
+      window.location.reload();
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
   }
 
   function copyConnect() {
-    void navigator.clipboard.writeText(status.connectUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
+    setError(false);
+    void navigator.clipboard
+      .writeText(status.connectUrl)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      })
+      .catch(() => setError(true));
   }
 
   return (
@@ -59,6 +73,11 @@ export function Settings({ status }: { status: Status }) {
       />
 
       <div className="grid gap-4">
+        {error && (
+          <p role="alert" className="text-sm text-coral-300">
+            {t("conn.error")}
+          </p>
+        )}
         <section className="panel min-w-0 p-5 md:p-6">
           <h2 className="text-lg font-bold text-cream-50">
             {t("setup.title")}
@@ -148,6 +167,7 @@ export function Settings({ status }: { status: Status }) {
             <select
               className="field max-w-xs"
               value={defAcc}
+              disabled={saving}
               onChange={(e) => changeDefault(e.target.value)}
             >
               {status.accounts.map((a) => (

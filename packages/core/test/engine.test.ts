@@ -170,6 +170,22 @@ describe("AutomationEngine", () => {
     await engine.handleEvent(commentEvent({ text: "چه رنگی داره؟" }));
     expect(api.privateReplies).toHaveLength(0);
   });
+  it("ignores the business's own comment to prevent reply loops", async () => {
+    await repos.automations.upsert(
+      commentAutomation({
+        commentAction: {
+          privateReply: true,
+          publicReply: "Example reply",
+          hideComment: false,
+        },
+      }),
+    );
+    await engine.handleEvent(
+      commentEvent({ from: { id: account.igId, username: account.username } }),
+    );
+    expect(api.privateReplies).toHaveLength(0);
+    expect(api.publicReplies).toHaveLength(0);
+  });
 
   it("respects a mediaIds filter", async () => {
     await repos.automations.upsert(

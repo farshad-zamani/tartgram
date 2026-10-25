@@ -330,3 +330,145 @@ test("Persian setup remains usable on a narrow screen", async ({ page }) => {
     fullPage: true,
   });
 });
+
+test("inbox load failures offer retry instead of claiming the inbox is empty", async ({
+  page,
+}) => {
+  await demo(page, "en");
+  let attempts = 0;
+  await page.route("**/api/accounts/*/conversations", (route) =>
+    route.fulfill(
+      ++attempts === 1
+        ? { status: 502, json: { error: "meta_request_failed" } }
+        : { json: [] },
+    ),
+  );
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Could not load this inbox",
+  );
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(attempts).toBe(2);
+});
+
+test("threaded replies send the selected message ID once even with repeated Enter", async ({
+  page,
+}) => {
+  await demo(page, "en");
+  const sent: Record<string, unknown>[] = [];
+  await page.route("**/api/accounts/*/send", async (route) => {
+    sent.push(route.request().postDataJSON());
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.fulfill({ json: { ok: true, messageId: "synthetic-reply" } });
+  });
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
+  await page.getByRole("button", { name: /sample_customer/ }).click();
+  await page
+    .getByRole("button", { name: "Reply to this message", exact: true })
+    .first()
+    .click();
+  await page.locator("textarea").fill("Example reply");
+  await page.locator("textarea").press("Enter");
+  await page.locator("textarea").press("Enter");
+  await expect(page.locator("textarea")).toHaveValue("");
+  expect(sent).toEqual([
+    {
+      recipientId: "person-1",
+      text: "Example reply",
+      humanAgent: false,
+      replyToMid: "m1",
+    },
+  ]);
+});
+
+test("comment action errors keep the draft and display a failure", async ({
+  page,
+}) => {
+  await demo(page, "en");
+  await page.route("**/api/accounts/*/comments/*/reply", (route) =>
+    route.fulfill({ status: 502, json: { error: "meta_request_failed" } }),
+  );
+  await page.getByRole("button", { name: "Inbox", exact: true }).click();
+  await page.getByRole("button", { name: "Comments", exact: true }).click();
+  await page.getByRole("button", { name: "Reply", exact: true }).click();
+  await page.getByRole("textbox").fill("Keep this draft");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "The action was not confirmed",
+  );
+  await expect(page.getByRole("textbox")).toHaveValue("Keep this draft");
+});
+
+test("mobile inbox shows the selected thread and returns to the conversation list", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await demo(page, "fa");
+  await page.getByRole("button", { name: "اینباکس", exact: true }).click();
+  await page.getByRole("button", { name: /sample_customer/ }).click();
+  await expect(page.locator("textarea")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.querySelector("main")!.scrollWidth <=
+          document.querySelector("main")!.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "docs/screenshots/inbox-mobile-fa.png",
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "بازگشت به گفتگوها", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: /sample_customer/ }),
+  ).toBeVisible();
+});
+
+test("a failed logout keeps the panel open instead of pretending the session ended", async ({
+  page,
+}) => {
+  await demo(page, "en");
+  await page.route("**/api/auth/session", (route) =>
+    route.request().method() === "DELETE"
+      ? route.fulfill({ status: 503, json: { error: "unavailable" } })
+      : route.fulfill({ json: { ok: true } }),
+  );
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#tok")).toHaveCount(0);
+});
+
+test("story captions remain editable and ambiguous publishing has a specific warning", async ({
+  page,
+}) => {
+  await demo(page, "en");
+  let submitted: Record<string, unknown> | undefined;
+  await page.route("**/api/accounts/*/publish", async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({
+      status: 409,
+      json: { error: "publish_outcome_unknown", postId: "uncertain-post" },
+    });
+  });
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.getByRole("button", { name: "Story", exact: true }).click();
+  await page.locator("textarea").fill("Example story caption");
+  await page.locator("summary").first().click();
+  await page
+    .getByPlaceholder("https://example.com/media.jpg")
+    .fill("https://example.com/story.jpg");
+  await page.locator("form .btn-primary").click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Check Instagram before publishing again",
+  );
+  expect(submitted).toMatchObject({
+    type: "story",
+    caption: "Example story caption",
+  });
+});

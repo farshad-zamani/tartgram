@@ -308,10 +308,13 @@ const DICT = {
     fa: "آپلود ناموفق بود (حداکثر ۲۰۰ مگابایت).",
     en: "Upload failed (max 200MB).",
   },
-  "pub.scheduledList": { fa: "پست‌های زمان‌بندی‌شده", en: "Scheduled posts" },
+  "pub.scheduledList": {
+    fa: "سوابق و زمان‌بندی انتشار",
+    en: "Publishing history and schedule",
+  },
   "pub.noScheduled": {
-    fa: "پستی زمان‌بندی نشده است.",
-    en: "No scheduled posts.",
+    fa: "هنوز انتشاری ثبت یا زمان‌بندی نشده است.",
+    en: "No publications recorded or scheduled yet.",
   },
   "pub.stPending": { fa: "در انتظار", en: "Pending" },
   "pub.stPublished": { fa: "منتشر شد", en: "Published" },

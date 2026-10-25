@@ -1,6 +1,6 @@
 # Meta API implementation notes
 
-Verified against official documentation on 24 October 2026. Start with [the setup guide](meta-setup.md) for app approval and configuration.
+Verified against official documentation on 25 October 2026. The [compatibility review](meta-audit-2026-10-25.md) records the current contracts and out-of-cycle changes. Start with [the setup guide](meta-setup.md) for app approval and configuration.
 
 - New apps use Unified Login, Business Integration System User tokens, `instagram_*` permissions and `graph.facebook.com`.
 - Eligible existing Instagram Login apps use Instagram User tokens, `instagram_business_*` permissions and `graph.instagram.com`. No automatic conversion is attempted.
@@ -13,6 +13,9 @@ Verified against official documentation on 24 October 2026. Start with [the setu
 - A missing `media_url` is valid after Meta's download/copyright changes; media IDs and permalinks remain useful.
 - `media_publish` can succeed with a non-blocking `config_issue`; callers retain the warning and must inspect the published result.
 - Contact-information quick replies were disabled in October 2026. This implementation sends only plain-text quick replies.
+- Inbox replies use the top-level `reply_to.mid` object. They use the same server-side messaging-window checks as ordinary direct messages.
+- A failed final publishing response may have an unknown outcome. The stored `uncertain` state requires inspecting Instagram before another attempt.
+- A signed callback's person identifier must not be assumed to equal a Unified business system user ID. Unmapped deletion requests need operator review; no other business's data is deleted to guess a match.
 - Recent API additions outside the current feature set, such as advertising, are not requested or advertised as implemented.
 
 Official references: [Unified authentication](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/authentication), [migration](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/migration-guide), [webhooks](https://developers.facebook.com/documentation/instagram-platform/webhooks), [private replies](https://developers.facebook.com/docs/instagram-platform/private-replies/), [content publishing](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing/), [Instagram changelog](https://developers.facebook.com/docs/instagram-platform/changelog/).

@@ -1,6 +1,7 @@
 import { readJson, atomicJson } from "./storage.js";
 import type { GatewayConfig } from "./config.js";
 import { tokenFor } from "./account-client.js";
+import { validFlow } from "./flow-validation.js";
 import { GRAPH_BASE_URL } from "@app/shared";
 import {
   AutomationEngine,
@@ -70,7 +71,10 @@ function toDomainAccount(c: ConnectedAccount): Account {
     tokenExpiresAt: c.expiresAt,
     scopes: c.scopes,
     connectedAt: c.connectedAt,
-    active: !c.reconnectRequired && c.subscriptionStatus === "active",
+    active:
+      !c.reconnectRequired &&
+      c.subscriptionStatus === "active" &&
+      (!c.expiresAt || c.expiresAt > Date.now()),
   };
 }
 
@@ -97,7 +101,7 @@ export interface AutomationsFile {
   iceBreakers?: Record<string, IceBreaker[]>;
 }
 
-/** Read the automations file, returning an empty definition if it's missing/invalid. */
+/** Missing files start empty; invalid stored data must be repaired or restored explicitly. */
 export async function loadAutomationsFile(
   path: string,
 ): Promise<Required<AutomationsFile>> {
@@ -159,7 +163,12 @@ class FileFlowRepository implements FlowRepository {
       const ib = (iceBreakers[accountId] ?? []).find((x) => x.id === ibId);
       return ib ? synthIceBreakerFlow(ib) : null;
     }
-    return (flows[accountId] ?? []).find((f) => f.id === flowId) ?? null;
+    const flow = (flows[accountId] ?? []).find((f) => f.id === flowId) ?? null;
+    if (flow && !validFlow(flow))
+      throw new Error(
+        "Stored flow is invalid. Repair its graph before enabling the automation.",
+      );
+    return flow;
   }
   async upsert(): Promise<void> {}
 }

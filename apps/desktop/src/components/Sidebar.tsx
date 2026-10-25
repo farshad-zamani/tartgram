@@ -56,7 +56,7 @@ export function Sidebar({
           <div className="text-sm font-extrabold text-cream-50">
             {t("app.name")}
           </div>
-          <div className="text-[11px] text-sand">v0.1</div>
+          <div className="text-[11px] text-sand">v0.2</div>
         </div>
       </div>
 
@@ -91,7 +91,7 @@ export function Sidebar({
         href="https://cloudtart.com"
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-5 break-all text-center text-xs leading-6 text-sand underline underline-offset-4"
+        className="mt-5 whitespace-nowrap text-center text-[10px] md:text-xs leading-6 text-sand underline underline-offset-4"
         aria-label="Made by CloudTart"
       >
         <span className="hidden md:inline">Made by </span>CloudTart

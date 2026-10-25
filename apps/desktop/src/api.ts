@@ -19,6 +19,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
   }
@@ -34,6 +35,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
     if (res.status === 401)
       window.dispatchEvent(new Event("tartgram:unauthorized"));
     const fa = document.documentElement.lang === "fa";
@@ -46,6 +48,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
           ? `درخواست ناموفق بود (${res.status}). تنظیمات و مجوز حساب را بررسی کنید.`
           : `Request failed (${res.status}). Check account setup and permissions.`,
       res.status,
+      body.error,
     );
   }
   return (await res.json()) as T;
@@ -140,12 +143,13 @@ export const api = {
     recipientId: string,
     text: string,
     humanAgent?: boolean,
+    replyToMid?: string,
   ) =>
     req<{ ok: boolean; messageId?: string }>(
       `/api/accounts/${encodeURIComponent(igId)}/send`,
       {
         method: "POST",
-        body: JSON.stringify({ recipientId, text, humanAgent }),
+        body: JSON.stringify({ recipientId, text, humanAgent, replyToMid }),
       },
     ),
   publishLimit: (igId: string) =>

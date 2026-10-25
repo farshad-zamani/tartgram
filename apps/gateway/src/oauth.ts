@@ -50,7 +50,13 @@ export async function metaJson(
     string,
     any
   > | null;
-  if (!res.ok || !json || json.error)
+  if (
+    !res.ok ||
+    !json ||
+    typeof json !== "object" ||
+    Array.isArray(json) ||
+    json.error
+  )
     throw new MetaConnectionError(
       "Meta rejected the request. Check the app, permissions and account eligibility, then reconnect.",
     );
@@ -127,7 +133,7 @@ export async function connectAccounts(
   code: string,
 ): Promise<ConnectedAccount[]> {
   const short = await exchangeCodeForToken(c, code);
-  if (typeof short?.access_token !== "string")
+  if (typeof short?.access_token !== "string" || !short.access_token.trim())
     throw new MetaConnectionError("Meta did not return an access token.");
   const connectionId = randomUUID(),
     connectedAt = Date.now();
@@ -147,7 +153,10 @@ export async function connectAccounts(
     if (
       !data?.is_valid ||
       String(data.app_id) !== c.metaAppId ||
-      !Array.isArray(data.scopes)
+      !Array.isArray(data.scopes) ||
+      !data.scopes.every((s: unknown) => typeof s === "string") ||
+      !Number.isFinite(data.expires_at) ||
+      data.expires_at < 0
     )
       throw new MetaConnectionError(
         "Meta could not validate this app authorization.",
@@ -156,6 +165,16 @@ export async function connectAccounts(
     if (UNIFIED_SCOPES.some((s) => !granted.includes(s)))
       throw new MetaConnectionError(
         "Grant all four requested Instagram permissions, then reconnect.",
+      );
+    const expirations = [data.expires_at, data.data_access_expires_at].filter(
+      (n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0,
+    );
+    const expiresAt = expirations.length
+      ? Math.min(...expirations) * 1000
+      : undefined;
+    if (expiresAt !== undefined && expiresAt <= connectedAt)
+      throw new MetaConnectionError(
+        "This authorization has expired. Connect again.",
       );
     const me = await metaJson(
       `${GRAPH_BASE_URL.facebookLogin}/${c.graphVersion}/me?fields=client_business_id`,
@@ -167,6 +186,9 @@ export async function connectAccounts(
       );
     const list: Record<string, any>[] = [];
     let after: string | undefined;
+    const cursors = new Set<string>();
+    const ids = new Set<string>();
+    let pages = 0;
     do {
       const u = queryUrl(
         `${GRAPH_BASE_URL.facebookLogin}/${c.graphVersion}/me/assigned_instagram_accounts`,
@@ -175,9 +197,33 @@ export async function connectAccounts(
       const page = await metaJson(u, { headers });
       if (!Array.isArray(page.data))
         throw new MetaConnectionError("Invalid account list from Meta.");
-      list.push(...page.data);
-      after = page.paging?.next ? page.paging?.cursors?.after : undefined;
-      if (list.length > 1000)
+      for (const a of page.data) {
+        if (
+          !a ||
+          typeof a.id !== "string" ||
+          !a.id ||
+          typeof a.username !== "string" ||
+          !a.username
+        )
+          throw new MetaConnectionError(
+            "Meta returned an incomplete account profile.",
+          );
+        if (!ids.has(a.id)) {
+          ids.add(a.id);
+          list.push(a);
+        }
+      }
+      after = undefined;
+      if (page.paging?.next) {
+        const cursor = page.paging?.cursors?.after;
+        if (typeof cursor !== "string" || !cursor || cursors.has(cursor))
+          throw new MetaConnectionError(
+            "Invalid account pagination from Meta. Reconnect to retry.",
+          );
+        cursors.add(cursor);
+        after = cursor;
+      }
+      if (list.length > 1000 || (++pages >= 10 && after))
         throw new MetaConnectionError(
           "Too many accounts in one authorization.",
         );
@@ -195,7 +241,7 @@ export async function connectAccounts(
         igId: a.id,
         username: a.username,
         accessToken: token,
-        expiresAt: data.expires_at > 0 ? data.expires_at * 1000 : undefined,
+        expiresAt,
         scopes: granted,
         connectedAt,
         connectionId,
@@ -217,10 +263,19 @@ export async function connectAccounts(
     throw new MetaConnectionError(
       "Grant all requested Instagram permissions, then reconnect.",
     );
+  if (
+    !["string", "number"].includes(typeof short.user_id) ||
+    !String(short.user_id).trim()
+  )
+    throw new MetaConnectionError(
+      "Meta did not return the authorization subject.",
+    );
   const long = await exchangeLongLived(c, short.access_token);
   if (
     typeof long.access_token !== "string" ||
-    typeof long.expires_in !== "number"
+    !long.access_token.trim() ||
+    !Number.isFinite(long.expires_in) ||
+    long.expires_in <= 0
   )
     throw new MetaConnectionError(
       "Meta returned incomplete token expiry information.",

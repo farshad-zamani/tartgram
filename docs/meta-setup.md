@@ -1,6 +1,6 @@
 # Set up Meta and connect Instagram
 
-Last researched: **24 October 2026**. Meta changes dashboard labels and requirements; the linked official documentation is the source of truth. This guide does not supply or guarantee approval.
+Last researched: **25 October 2026**. Meta changes dashboard labels and requirements; the linked official documentation is the source of truth. This guide does not supply or guarantee approval. Use the [live acceptance checklist](live-acceptance.md) after setup.
 
 ## 1. Choose the supported official setup
 

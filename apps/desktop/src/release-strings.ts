@@ -1,4 +1,20 @@
 export const releaseStrings = {
+  "common.retry": { fa: "تلاش مجدد", en: "Retry" },
+  "inbox.loadFail": {
+    fa: "دریافت اطلاعات انجام نشد. اتصال و مجوز حساب را بررسی و دوباره تلاش کنید.",
+    en: "Could not load this inbox. Check the connection and account permissions, then retry.",
+  },
+  "inbox.actionFail": {
+    fa: "عملیات تأیید نشد. پیش از تکرار، وضعیت کامنت را در اینستاگرام بررسی کنید.",
+    en: "The action was not confirmed. Check the comment on Instagram before trying again.",
+  },
+  "inbox.back": { fa: "بازگشت به گفتگوها", en: "Back to conversations" },
+  "inbox.replyTo": { fa: "پاسخ به این پیام", en: "Reply to this message" },
+  "inbox.replying": { fa: "در پاسخ به", en: "Replying to" },
+  "pub.outcomeUnknown": {
+    fa: "نتیجهٔ انتشار مشخص نیست. پیش از ارسال دوباره، اینستاگرام را بررسی کنید. جزئیات در فهرست انتشار ثبت شد.",
+    en: "The publishing outcome is unknown. Check Instagram before publishing again. A record has been saved in the publishing list.",
+  },
   "pub.captionTitle": { fa: "عنوان این کپشن:", en: "Caption title:" },
   "common.accountLabel": { fa: "اکانت", en: "Account" },
   "common.person": { fa: "کاربر", en: "User" },

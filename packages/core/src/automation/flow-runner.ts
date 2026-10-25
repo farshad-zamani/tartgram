@@ -22,11 +22,13 @@ export class DirectDelivery implements Delivery {
   constructor(
     private readonly api: InstagramApi,
     private readonly igsid: string,
+    private readonly allowed: () => boolean = () => true,
   ) {}
   canSend(): boolean {
-    return true;
+    return this.allowed();
   }
   async send(content: MessageContent): Promise<void> {
+    if (!this.canSend()) throw new Error("The messaging window has closed.");
     await this.api.sendMessage(this.igsid, content);
   }
 }
@@ -36,14 +38,17 @@ export class PrivateReplyDelivery implements Delivery {
   constructor(
     private readonly api: InstagramApi,
     private readonly commentId: string,
+    private readonly allowed: () => boolean = () => true,
   ) {}
   canSend(): boolean {
-    return !this.used;
+    return !this.used && this.allowed();
   }
   async send(content: MessageContent): Promise<void> {
     if (this.used) {
       throw new PrivateReplyExhaustedError();
     }
+    if (!this.allowed())
+      throw new Error("The private reply window has closed.");
     this.used = true;
     await this.api.sendPrivateReply(this.commentId, content);
   }

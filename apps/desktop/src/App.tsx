@@ -48,7 +48,12 @@ export function App() {
   }, [authed, load]);
 
   async function logout() {
-    await api.logout().catch(() => {});
+    try {
+      await api.logout();
+    } catch {
+      setError(true);
+      return;
+    }
     setAuthed(false);
     setStatus(null);
   }

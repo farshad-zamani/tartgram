@@ -76,7 +76,7 @@ These are captures of the real interface using **fictional sample data**, not ev
 
 ## Status and boundaries
 
-This is the first public release. Automated tests use official API response fixtures; **live end-to-end Meta testing and production app approval are not included in this release's validation**. See [validation and limitations](docs/validation.md).
+The current release is **v0.2.0**. The [25 October Meta compatibility review](docs/meta-audit-2026-10-25.md) records the official API contracts and reliability fixes. Automated tests use official API response fixtures; **live end-to-end Meta testing and production app approval are not included in this release's validation**. See [validation and limitations](docs/validation.md) and the operator's [live acceptance checklist](docs/live-acceptance.md).
 
 The gateway runs as a single process with atomic JSON storage and encrypted account tokens. Horizontal scaling, a durable event queue, delayed flow continuations, full-history inbox synchronization and guaranteed exactly-once external publishing are not implemented. Publishing interrupted during shutdown is shown as uncertain and requires checking Instagram before retrying. Webhooks acknowledge promptly and process in the background; a process failure after acknowledgement can lose pending work.
 

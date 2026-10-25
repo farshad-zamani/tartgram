@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, uploadMedia } from "../api.js";
+import { api, ApiError, uploadMedia } from "../api.js";
 import { IconCheck } from "../components/icons.js";
 import { Badge, PageHeader } from "../components/ui.js";
 import { useI18n, type MsgKey } from "../i18n.js";
@@ -47,6 +47,7 @@ export function Publish({ status }: { status: Status }) {
   } | null>(null);
   const [captions, setCaptions] = useState<Caption[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const publishingRef = useRef(false);
 
   useEffect(() => {
     api
@@ -62,13 +63,21 @@ export function Publish({ status }: { status: Status }) {
       ...captions,
       { id: crypto.randomUUID(), title: title.trim(), text: caption },
     ];
-    setCaptions(next);
-    await api.saveCaptions(next);
+    try {
+      await api.saveCaptions(next);
+      setCaptions(next);
+    } catch {
+      setMsg({ ok: false, text: t("pub.publishFail") });
+    }
   }
   async function deleteCaption(id: string) {
     const next = captions.filter((c) => c.id !== id);
-    setCaptions(next);
-    await api.saveCaptions(next);
+    try {
+      await api.saveCaptions(next);
+      setCaptions(next);
+    } catch {
+      setMsg({ ok: false, text: t("pub.publishFail") });
+    }
   }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -92,7 +101,7 @@ export function Publish({ status }: { status: Status }) {
     api
       .publishLimit(igId)
       .then(setLimit)
-      .catch(() => {});
+      .catch(() => setLimit(null));
     api
       .scheduled(igId)
       .then(setScheduled)
@@ -102,7 +111,8 @@ export function Publish({ status }: { status: Status }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!url.trim()) return;
+    if (publishingRef.current || !url.trim()) return;
+    publishingRef.current = true;
     setBusy(true);
     setMsg(null);
     try {
@@ -127,16 +137,29 @@ export function Publish({ status }: { status: Status }) {
       setWhen("");
       setPreview(null);
       refresh();
-    } catch {
-      setMsg({ ok: false, text: t("pub.publishFail") });
+    } catch (error) {
+      setMsg({
+        ok: false,
+        text: t(
+          error instanceof ApiError && error.code === "publish_outcome_unknown"
+            ? "pub.outcomeUnknown"
+            : "pub.publishFail",
+        ),
+      });
+      refresh();
     } finally {
       setBusy(false);
+      publishingRef.current = false;
     }
   }
 
   async function del(id: string) {
-    await api.deleteScheduled(igId, id);
-    refresh();
+    try {
+      await api.deleteScheduled(igId, id);
+      refresh();
+    } catch {
+      setMsg({ ok: false, text: t("pub.publishFail") });
+    }
   }
 
   if (status.accounts.length === 0) {
@@ -275,63 +298,61 @@ export function Publish({ status }: { status: Status }) {
             </details>
           </div>
 
-          {type !== "story" && (
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <label className="label mb-0">{t("pub.caption")}</label>
-                {caption.trim() && (
-                  <button
-                    type="button"
-                    onClick={saveCurrentCaption}
-                    className="text-xs text-coral-400 hover:text-coral-500"
-                  >
-                    {t("pub.saveToLibrary")}
-                  </button>
-                )}
-              </div>
-              <textarea
-                className="field min-h-[80px] resize-none"
-                placeholder={t("pub.captionPlaceholder")}
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-              />
-              {captions.length > 0 && (
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-xs text-sand">
-                    {t("pub.library", { n: captions.length })}
-                  </summary>
-                  <div className="mt-2 grid gap-1.5">
-                    {captions.map((c) => (
-                      <div
-                        key={c.id}
-                        className="flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-950/40 p-2"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setCaption(c.text)}
-                          className="min-w-0 flex-1 text-start"
-                        >
-                          <div className="truncate text-xs font-medium text-cream-100">
-                            {c.title}
-                          </div>
-                          <div className="truncate text-[11px] text-sand">
-                            {c.text}
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteCaption(c.id)}
-                          className="shrink-0 text-xs text-sand hover:text-coral-400"
-                        >
-                          {t("common.delete")}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </details>
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <label className="label mb-0">{t("pub.caption")}</label>
+              {caption.trim() && (
+                <button
+                  type="button"
+                  onClick={saveCurrentCaption}
+                  className="text-xs text-coral-400 hover:text-coral-500"
+                >
+                  {t("pub.saveToLibrary")}
+                </button>
               )}
             </div>
-          )}
+            <textarea
+              className="field min-h-[80px] resize-none"
+              placeholder={t("pub.captionPlaceholder")}
+              value={caption}
+              onChange={(e) => setCaption(e.target.value)}
+            />
+            {captions.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-sand">
+                  {t("pub.library", { n: captions.length })}
+                </summary>
+                <div className="mt-2 grid gap-1.5">
+                  {captions.map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-950/40 p-2"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setCaption(c.text)}
+                        className="min-w-0 flex-1 text-start"
+                      >
+                        <div className="truncate text-xs font-medium text-cream-100">
+                          {c.title}
+                        </div>
+                        <div className="truncate text-[11px] text-sand">
+                          {c.text}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteCaption(c.id)}
+                        className="shrink-0 text-xs text-sand hover:text-coral-400"
+                      >
+                        {t("common.delete")}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
 
           <div>
             <label className="label">{t("pub.when")}</label>
@@ -358,7 +379,10 @@ export function Publish({ status }: { status: Status }) {
           </div>
 
           {msg && (
-            <p className={`text-sm ${msg.ok ? "text-moss" : "text-coral-400"}`}>
+            <p
+              role={msg.ok ? "status" : "alert"}
+              className={`text-sm ${msg.ok ? "text-moss" : "text-coral-400"}`}
+            >
               {msg.text}
             </p>
           )}

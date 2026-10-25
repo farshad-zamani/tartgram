@@ -1,6 +1,6 @@
 {
   "name": "tartgram",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Self-hosted Instagram automation by CloudTart, using official Meta APIs.",
@@ -13,7 +13,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:run": "pnpm -r test:run",
-    "lint": "pnpm -r lint",
+    "lint": "pnpm format:check && pnpm typecheck",
     "clean": "pnpm -r clean",
     "dev:gateway": "node --env-file=.env --import tsx --watch apps/gateway/src/index.ts",
     "setup:secrets": "node scripts/generate-secrets.mjs",

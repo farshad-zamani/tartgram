@@ -15,7 +15,7 @@ import {
  */
 export function normalizeWebhookBody(body: unknown): NormalizedEvent[] {
   const parsed = zMetaWebhookBody.safeParse(body);
-  if (!parsed.success) return [];
+  if (!parsed.success || parsed.data.object !== "instagram") return [];
 
   const events: NormalizedEvent[] = [];
   for (const entry of parsed.data.entry) {
@@ -98,9 +98,30 @@ function normalizeMessaging(
   const senderId = m.sender?.id ?? "";
   // Messenger-style timestamps are already epoch milliseconds.
   const ts = m.timestamp ?? entryTsMs;
+  if (!senderId && (m.message || m.postback)) return null;
 
   if (m.message) {
     const msg = m.message;
+    if (
+      msg.is_deleted === true ||
+      msg.is_unsupported === true ||
+      msg.is_self === true
+    ) {
+      const field =
+        msg.is_deleted === true
+          ? "message_deleted"
+          : msg.is_self === true
+            ? "message_self"
+            : "message_unsupported";
+      return {
+        type: "unknown",
+        field,
+        accountId,
+        timestamp: ts,
+        dedupeKey: `${field}:${msg.mid ?? `${senderId}:${ts}`}`,
+        raw: msg,
+      };
+    }
     const attachments = (msg.attachments ?? []).map((a) => ({
       type: a.type,
       url:

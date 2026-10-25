@@ -47,9 +47,9 @@ Keep the encryption key stable across ordinary upgrades. Changing it without dec
 
 Schedules store epoch milliseconds; the datetime control uses the browser's local time. Verify the server clock and your browser timezone. A single worker checks due posts approximately every 30 seconds. Quota is fetched before publishing; there is no guessed fallback limit.
 
-Before a scheduled external action, the record changes to `publishing`. If the process restarts in that state, it becomes `uncertain` and is not retried automatically. Check Instagram before creating another post. Network failures can also leave an uncertain external result even when the UI reports a failure; this release does not guarantee exactly-once external delivery.
+Immediate and scheduled publications are persisted before their external action as `publishing`. If the process restarts in that state, it becomes `uncertain` and is not retried automatically. Lost, invalid or server-error responses from the final publication also become `uncertain`, retaining a container ID when available. Check Instagram before creating another post. A non-blocking warning can accompany a successful publication. This release does not guarantee exactly-once external delivery. Container processing is checked once per minute for up to five minutes; long video submissions can keep the form busy during that time.
 
-JPEG images and MP4 videos are accepted after header checks, up to 200 MB per upload. Meta's own publishing specifications may be more restrictive. Formats, aspect ratios, duration, account eligibility and copyrighted audio can cause rejection. Uploaded files have public unguessable URLs, as required for Meta to fetch them; never upload confidential material. Records include their owning account. Unused files expire after seven days during hourly cleanup; pending/publishing schedules retain their files. Disconnecting the account removes its uploads and jobs.
+JPEG images and MP4 videos are accepted after header checks, up to 200 MB per upload. Meta's own publishing specifications may be more restrictive. Formats, aspect ratios, duration, account eligibility and copyrighted audio can cause rejection. Uploaded files have public unguessable URLs, as required for Meta to fetch them; never upload confidential material. Files stay in a hidden staging path until validation. Records include their owning account; another account cannot schedule a locally hosted upload it does not own. Unused files expire after seven days during hourly cleanup; pending/publishing/uncertain records retain their files. Disconnecting the account removes its uploads and jobs.
 
 ## Messaging and event processing
 
@@ -79,6 +79,10 @@ JPEG images and MP4 videos are accepted after header checks, up to 200 MB per up
 | Media thumbnail absent | Meta may omit `media_url`; the interface uses a thumbnail or placeholder and keeps a permalink when available |
 | Published without caption | A non-blocking Meta `config_issue` can be returned; check the warning and inspect the published post |
 | Corrupt/wrong-key store | Stop the gateway and restore a verified matching backup; do not replace the file with an empty array |
-| Deletion needs attention | Retry the signed request or administrative deletion and inspect private storage permissions; unknown confirmation codes return 404 |
+| Deletion needs attention | Inspect storage permissions and verify the requester. A person's signed ID may not map to a Unified business system user; verify the account and delete through Accounts rather than guessing a different business. Expired/unknown confirmation codes return 404 |
 
 When reporting a bug, include the release version, selected login mode, reproduction steps, response status and sanitized logs. Do not send passwords, tokens, OAuth codes, signatures or customer conversations. Use the private security channel for a vulnerability.
+
+## Upgrade from v0.1.0 to v0.2.0
+
+Keep the existing encryption key and private environment. Ordinary encrypted account and schedule files remain compatible; the new publication-history fields are optional. A stricter validator rejects cyclic, dangling or over-100-node flow definitions, duplicate identifiers and unsupported delays. Repair any hand-edited invalid flows while the gateway is stopped. Use the dedicated ice-breaker screen/API so local configuration and Meta stay synchronized. Unmapped signed privacy requests now need verified operator follow-up instead of receiving a false success status. Run [live acceptance](live-acceptance.md) before re-enabling business automations after the update.

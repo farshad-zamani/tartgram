@@ -109,7 +109,13 @@ export class AutomationEngine {
 
   private async handleComment(event: CommentEvent): Promise<void> {
     const account = await this.resolveAccount(event.accountId);
-    if (!account) return;
+    if (
+      !account ||
+      event.from?.id === account.igId ||
+      (event.from?.username &&
+        event.from.username.toLowerCase() === account.username.toLowerCase())
+    )
+      return;
     const age = this.clock.now() - event.timestamp;
     if (age < -300_000 || age > this.eventWindowMs(event)) return;
     const api = this.getApi(account);
@@ -159,6 +165,7 @@ export class AutomationEngine {
         const delivery: Delivery = new PrivateReplyDelivery(
           api,
           event.commentId,
+          () => this.clock.now() - event.timestamp < this.eventWindowMs(event),
         );
         await this.fireAutomation(
           account,
@@ -183,7 +190,8 @@ export class AutomationEngine {
   }
 
   private async handleMessage(event: MessageEvent): Promise<void> {
-    if (event.isEcho) return; // ignore our own outbound messages
+    if (event.isEcho || event.senderId === event.accountId || !event.senderId)
+      return;
     const account = await this.resolveAccount(event.accountId);
     if (!account) return;
     const age = this.clock.now() - event.timestamp;
@@ -295,7 +303,13 @@ export class AutomationEngine {
       contact.id,
       contact.igsid,
       automation,
-      new DirectDelivery(api, contact.igsid),
+      new DirectDelivery(api, contact.igsid, () =>
+        Boolean(
+          contact.lastInboundAt &&
+          this.clock.now() - contact.lastInboundAt <
+            TIMING.messagingWindowHours * 3600_000,
+        ),
+      ),
       api,
     );
   }
@@ -368,7 +382,13 @@ export class AutomationEngine {
       });
     }
 
-    const delivery = new DirectDelivery(api, contact.igsid);
+    const delivery = new DirectDelivery(api, contact.igsid, () =>
+      Boolean(
+        contact.lastInboundAt &&
+        this.clock.now() - contact.lastInboundAt <
+          TIMING.messagingWindowHours * 3600_000,
+      ),
+    );
     if (isFollower) {
       this.logger.info("Follow-gate passed; delivering reward", {
         automationId,

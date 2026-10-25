@@ -23,6 +23,52 @@ it("normalizes both seconds and millisecond entry timestamps without changing th
 });
 
 describe("normalizeWebhookBody", () => {
+  it("ignores webhook objects for other products", () =>
+    expect(
+      normalizeWebhookBody({
+        object: "page",
+        entry: [
+          {
+            id: "account",
+            changes: [{ field: "comments", value: { id: "comment" } }],
+          },
+        ],
+      }),
+    ).toEqual([]));
+  it("does not create an inbound message without a sender", () =>
+    expect(
+      normalizeWebhookBody({
+        object: "instagram",
+        entry: [
+          {
+            id: "account",
+            messaging: [{ message: { mid: "message", text: "hello" } }],
+          },
+        ],
+      }),
+    ).toEqual([]));
+  it.each(["is_deleted", "is_unsupported", "is_self"])(
+    "does not treat %s notifications as a new inbound message",
+    (flag) => {
+      const events = normalizeWebhookBody({
+        object: "instagram",
+        entry: [
+          {
+            id: "account",
+            messaging: [
+              {
+                sender: { id: "person" },
+                message: { mid: "message", [flag]: true },
+              },
+            ],
+          },
+        ],
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("unknown");
+      expect(events[0]?.dedupeKey).not.toBe("message:message");
+    },
+  );
   it("returns [] for non-webhook input", () => {
     expect(normalizeWebhookBody({ foo: "bar" })).toEqual([]);
     expect(normalizeWebhookBody(null)).toEqual([]);

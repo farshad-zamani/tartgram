@@ -17,16 +17,27 @@ export function Inbox({ status }: { status: Status }) {
   const [tab, setTab] = useState<"dm" | "comments">("dm");
   const [convos, setConvos] = useState<Conversation[] | null>(null);
   const [active, setActive] = useState<Conversation | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     if (!igId) return;
     setConvos(null);
     setActive(null);
+    setLoadError(false);
+    let current = true;
     api
       .conversations(igId)
-      .then(setConvos)
-      .catch(() => setConvos([]));
-  }, [igId]);
+      .then((rows) => {
+        if (current) setConvos(rows);
+      })
+      .catch(() => {
+        if (current) setLoadError(true);
+      });
+    return () => {
+      current = false;
+    };
+  }, [igId, reload]);
 
   if (status.accounts.length === 0) {
     return (
@@ -76,12 +87,16 @@ export function Inbox({ status }: { status: Status }) {
       </div>
 
       {tab === "comments" ? (
-        <CommentsFeed igId={igId} />
+        <CommentsFeed key={igId} igId={igId} />
       ) : (
         <div className="panel flex h-[calc(100vh-16rem)] overflow-hidden p-0">
           {/* Conversation list */}
-          <div className="w-72 shrink-0 overflow-y-auto border-e border-ink-800/70">
-            {convos === null ? (
+          <div
+            className={`${active ? "hidden md:block" : "block"} w-full md:w-72 shrink-0 overflow-y-auto border-e border-ink-800/70`}
+          >
+            {loadError ? (
+              <LoadError onRetry={() => setReload((n) => n + 1)} />
+            ) : convos === null ? (
               <div className="p-6 text-center text-sm text-sand">
                 {t("common.loading")}
               </div>
@@ -118,13 +133,16 @@ export function Inbox({ status }: { status: Status }) {
           </div>
 
           {/* Thread */}
-          <div className="flex min-w-0 flex-1 flex-col">
+          <div
+            className={`${active ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}
+          >
             {active ? (
               <Thread
-                key={active.id}
+                key={`${igId}:${active.id}`}
                 igId={igId}
                 convo={active}
                 humanAgentEnabled={status.setup.humanAgentEnabled}
+                onBack={() => setActive(null)}
               />
             ) : (
               <div className="grid flex-1 place-items-center text-sm text-sand">
@@ -138,35 +156,54 @@ export function Inbox({ status }: { status: Status }) {
   );
 }
 
+function LoadError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div role="alert" className="p-4 text-sm text-cream-100">
+      <p>{t("inbox.loadFail")}</p>
+      <button className="btn-secondary mt-3" onClick={onRetry}>
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
 function CommentsFeed({ igId }: { igId: string }) {
   const { t } = useI18n();
   const [list, setList] = useState<StoredComment[] | null>(null);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [actionError, setActionError] = useState(false);
 
   function refresh() {
     if (!igId) return;
     setList(null);
+    setLoadError(false);
     api
       .comments(igId)
       .then(setList)
-      .catch(() => setList([]));
+      .catch(() => setLoadError(true));
   }
   useEffect(refresh, [igId]);
 
   async function act(fn: () => Promise<unknown>) {
     setBusy(true);
+    setActionError(false);
     try {
       await fn();
       refresh();
-    } finally {
-      setBusy(false);
       setReplyTo(null);
       setReplyText("");
+    } catch {
+      setActionError(true);
+    } finally {
+      setBusy(false);
     }
   }
 
+  if (loadError) return <LoadError onRetry={refresh} />;
   if (list === null)
     return (
       <div className="panel p-10 text-center text-sand">
@@ -184,6 +221,11 @@ function CommentsFeed({ igId }: { igId: string }) {
 
   return (
     <div className="grid gap-2">
+      {actionError && (
+        <p role="alert" className="p-3 text-sm text-coral-300">
+          {t("inbox.actionFail")}
+        </p>
+      )}
       {list.map((c) => (
         <div
           key={c.id}
@@ -276,10 +318,12 @@ function Thread({
   igId,
   convo,
   humanAgentEnabled,
+  onBack,
 }: {
   igId: string;
   convo: Conversation;
   humanAgentEnabled: boolean;
+  onBack: () => void;
 }) {
   const { t } = useI18n();
   const [messages, setMessages] = useState<InboxMessage[] | null>(null);
@@ -287,48 +331,73 @@ function Thread({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [humanAgent, setHumanAgent] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [replyTo, setReplyTo] = useState<InboxMessage | null>(null);
+  const sendingRef = useRef(false);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
 
   function load() {
+    setLoadError(false);
     api
       .conversationMessages(igId, convo.id)
       .then(setMessages)
-      .catch(() => setMessages([]));
+      .catch(() => setLoadError(true));
   }
   useEffect(load, [igId, convo.id]);
+  useEffect(() => () => clearTimeout(reloadTimer.current), []);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (!text.trim() || !convo.userId) return;
+    if (sendingRef.current || !text.trim() || !convo.userId) return;
+    sendingRef.current = true;
     setSending(true);
     setError("");
     try {
-      await api.sendDm(igId, convo.userId, text.trim(), humanAgent);
+      await api.sendDm(
+        igId,
+        convo.userId,
+        text.trim(),
+        humanAgent,
+        replyTo?.id,
+      );
       setText("");
-      setTimeout(load, 600);
+      setReplyTo(null);
+      reloadTimer.current = setTimeout(load, 600);
     } catch {
       setError(t("inbox.sendFail"));
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   }
 
   return (
     <>
-      <div className="flex items-center gap-3 border-b border-ink-800/70 px-4 py-3">
-        <span className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-coral-500 to-amber-500 text-ink-950">
+      <div className="flex flex-wrap items-center gap-3 border-b border-ink-800/70 px-4 py-3">
+        <button className="btn-secondary w-full md:hidden" onClick={onBack}>
+          {t("inbox.back")}
+        </button>
+        <span className="hidden md:grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-coral-500 to-amber-500 text-ink-950">
           <IconInstagram className="h-4 w-4" />
         </span>
-        <span className="font-semibold text-cream-50" dir="ltr">
+        <span
+          className="min-w-0 break-all font-semibold text-cream-50"
+          dir="ltr"
+        >
           @{convo.username || convo.userId}
         </span>
       </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {messages === null ? (
+        {loadError ? (
+          <LoadError onRetry={load} />
+        ) : messages === null ? (
           <div className="text-center text-sm text-sand">
             {t("common.loading")}
           </div>
@@ -346,9 +415,18 @@ function Thread({
                   : "me-auto bg-ink-800 text-cream-100"
               }`}
             >
-              {m.text || (
-                <span className="opacity-60">{t("inbox.attachment")}</span>
-              )}
+              <p className="whitespace-pre-wrap break-words">
+                {m.text || (
+                  <span className="opacity-60">{t("inbox.attachment")}</span>
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={() => setReplyTo(m)}
+                className="mt-1 block text-xs underline underline-offset-2"
+              >
+                {t("inbox.replyTo")}
+              </button>
             </div>
           ))
         )}
@@ -356,6 +434,20 @@ function Thread({
       </div>
 
       <form onSubmit={send} className="border-t border-ink-800/70 p-3">
+        {replyTo && (
+          <div className="mb-2 flex items-center gap-2 text-xs text-cream-100">
+            <span className="min-w-0 flex-1 truncate">
+              {t("inbox.replying")}: {replyTo.text || t("inbox.attachment")}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setReplyTo(null)}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        )}
         {error && <p className="mb-2 text-xs text-coral-400">{error}</p>}
         <div className="flex items-end gap-2">
           <textarea

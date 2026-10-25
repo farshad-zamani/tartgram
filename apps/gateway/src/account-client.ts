@@ -1,4 +1,4 @@
-import { GraphClient, TokenManager } from "@app/core";
+import { GraphClient, GraphApiError, TokenManager } from "@app/core";
 import { GRAPH_BASE_URL } from "@app/shared";
 import type { GatewayConfig } from "./config.js";
 import { JsonAccountStore } from "./account-store.js";
@@ -54,7 +54,11 @@ export async function tokenFor(
           refreshAfter: Date.now() + 86400_000,
         });
         return fresh.token;
-      } catch {
+      } catch (error) {
+        if (error instanceof GraphApiError && error.isTokenExpired) {
+          await store.invalidateToken(account.accessToken);
+          throw new Error("Authorization revoked. Reconnect this account.");
+        }
         await store.upsert({ ...account, refreshAfter: Date.now() + 3600_000 });
       }
     }

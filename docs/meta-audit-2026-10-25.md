@@ -1,0 +1,26 @@
+# Meta compatibility review — 25 October 2026
+
+TartGram v0.2.0, made by [CloudTart](https://cloudtart.com). This review covers the shipped Instagram features, rather than every Meta product or endpoint. The official documents below were retrieved and compared with the implementation on this date. API fixture tests and actual Meta account tests have different scopes.
+
+| Official contract or change | Shipped behavior | Verification |
+| --- | --- | --- |
+| [Current Graph version](https://developers.facebook.com/docs/graph-api/changelog/) | v26.0 remains the default shared version | Config and request contract tests |
+| [v26 protocol changes](https://developers.facebook.com/docs/graph-api/changelog/version26.0/) | No dependency on removed root `ids`, `date_format`, legacy ETags, `pretty` or `debug` behavior; `debug_token` remains available | Source review; October 27 cross-version deadline checked |
+| [Unified setup](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/get-started) | Configuration-based login, server code exchange, business ID and assigned Instagram IDs, explicit account requests on the Facebook Graph host | Multi-account, malformed profile, pagination and permission tests |
+| [Unified authentication](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/authentication) | Server-only business system user tokens; real expiry; reconnect after revocation; no assumed 60-day Unified lifetime | Expiry and revoked-token tests |
+| [Unified permissions](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-unified-login/permissions) | Four Instagram feature permissions; no advertising or optional token-management permission requested | Scope contract tests; configuration review |
+| [Legacy migration](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/migration-guide) | New apps use Unified; eligible existing Instagram Login apps retain their separate host, credentials, scopes and official refresh | Both official response shapes; expiry, refresh serialization and revocation tests |
+| [Webhook examples](https://developers.facebook.com/documentation/instagram-platform/webhooks/examples) | Raw-body signature verification, seconds/milliseconds normalization; deletion, unsupported, self-test and outbound notifications do not trigger message automation | Signature, normalization and engine tests |
+| [Message replies](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/) | Selected-message reply with `reply_to.mid`; server enforces the messaging window | Graph payload, management API and browser tests |
+| [Text quick replies](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/quick-replies/) | Text-only quick replies, up to 13 with titles up to 20 characters | Schema tests; no phone/email quick replies |
+| [Content publishing](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing/) | JPEG/MP4 upload gate, live quota, explicit container readiness, one-minute polls up to five minutes, scheduled publishing | Success, rejection, invalid quota, polling, interruption and lost-response tests |
+| [Instagram changelog](https://developers.facebook.com/docs/instagram-platform/changelog/) | Story captions visible in the panel; `config_issue` retained after successful publication; absent `media_url` accepted | Story caption, warning and optional-media-field review |
+| [Signed data deletion](https://developers.facebook.com/documentation/development/create-an-app/app-dashboard/data-deletion-callback) | Signature verification and real status; unknown person-to-business mapping requires operator review | Invalid signature, complete purge, unknown mapping and status expiry tests |
+
+The latest retrieved Instagram changelog entry was 20 October 2026. Its ad-comment ordering feature, Facebook-Login-only caption add-ons and Creator Marketplace additions are outside this release's feature set. Their permissions and parameters are not silently requested. The September 21 message-reply addition and October 20 story-caption behavior are covered above; October 5 contact quick-reply removal does not affect text-only replies.
+
+## What remains to validate on an operator's app
+
+No eligible operator app and authorized live test-account configuration was supplied for this review. Live OAuth consent, App Review, Advanced Access, business verification, production webhook delivery and actual publishing therefore remain unverified. Complete [live acceptance](live-acceptance.md), including both login families if you use both. Screenshots contain fictional data. Passing fixtures establishes tested software behavior; it does not establish Meta approval or guarantee the absence of bugs.
+
+The supported architecture remains one process for one trusted administrative workspace. The webhook receiver is not a durable queue. Full inbox history and automatic person-to-business privacy mapping remain documented limits in [validation](validation.md).

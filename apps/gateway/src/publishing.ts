@@ -1,4 +1,4 @@
-import { GraphClient, type Logger } from "@app/core";
+import { GraphClient, PublicationUncertainError, type Logger } from "@app/core";
 import type { GatewayConfig } from "./config.js";
 import { JsonAccountStore } from "./account-store.js";
 import { JsonFile, serialized } from "./storage.js";
@@ -14,6 +14,7 @@ export interface ScheduledPost {
   scheduleAt: number;
   status: "pending" | "publishing" | "published" | "failed" | "uncertain";
   publishedMediaId?: string;
+  containerId?: string;
   error?: string;
   warnings?: string[];
   createdAt: number;
@@ -59,7 +60,11 @@ export async function publishNow(
   const quota = (await client.getContentPublishingLimit()).data?.[0];
   if (
     typeof quota?.quota_usage !== "number" ||
-    typeof quota?.config?.quota_total !== "number"
+    !Number.isFinite(quota.quota_usage) ||
+    quota.quota_usage < 0 ||
+    typeof quota?.config?.quota_total !== "number" ||
+    !Number.isFinite(quota.config.quota_total) ||
+    quota.config.quota_total < 0
   )
     throw new Error("Publishing quota unavailable. Try again later.");
   if (quota.quota_usage >= quota.config.quota_total)
@@ -114,25 +119,37 @@ export function startScheduler(opts: {
             return;
           }
           await opts.scheduled.update(post.id, { status: "publishing" });
+          let mediaId: string;
           try {
-            const mediaId = await publishNow(
+            mediaId = await publishNow(
               client,
               post.type,
               post.url,
               post.caption,
             );
+          } catch (error) {
             await opts.scheduled.update(post.id, {
-              status: "published",
-              publishedMediaId: mediaId,
-              warnings: client.publishWarnings,
-            });
-          } catch {
-            await opts.scheduled.update(post.id, {
-              status: "failed",
+              status:
+                error instanceof PublicationUncertainError
+                  ? "uncertain"
+                  : "failed",
+              containerId:
+                error instanceof PublicationUncertainError
+                  ? error.containerId
+                  : undefined,
               error:
-                "Publishing failed. Check permissions, quota and media requirements. Check Instagram before retrying a timed-out request.",
+                error instanceof PublicationUncertainError
+                  ? error.message
+                  : "Publishing failed. Check permissions, quota and media requirements. Check Instagram before retrying a timed-out request.",
             });
+            return;
           }
+          // A storage failure after success must leave this job in 'publishing', never 'failed'.
+          await opts.scheduled.update(post.id, {
+            status: "published",
+            publishedMediaId: mediaId,
+            warnings: client.publishWarnings,
+          });
         });
       }
     })()

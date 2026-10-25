@@ -30,9 +30,9 @@ export class GraphApiError extends Error {
     );
   }
 
-  /** Token invalid/expired: code 190 (with various subcodes) or OAuthException. */
+  /** Token invalid/expired. Permission failures can also use the OAuthException type. */
   get isTokenExpired(): boolean {
-    return this.code === 190 || this.type === "OAuthException";
+    return this.code === 190 || this.httpStatus === 401;
   }
 
   /**
@@ -43,5 +43,15 @@ export class GraphApiError extends Error {
     return (
       this.code === 10 && (this.subcode === 2534022 || this.subcode === 2018278)
     );
+  }
+}
+
+/** The final publish request may have reached Meta. Never retry it automatically. */
+export class PublicationUncertainError extends Error {
+  constructor(readonly containerId: string) {
+    super(
+      "Publishing outcome is unknown. Check Instagram before publishing again.",
+    );
+    this.name = "PublicationUncertainError";
   }
 }
