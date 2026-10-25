@@ -65,7 +65,8 @@ describe("publication failure boundaries", () => {
     const next = await buildServer(config);
     servers.push(next);
     await next.app.ready();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await next.app.close();
+    servers.pop();
     expect(fetcher).toHaveBeenCalledTimes(4);
   });
   it("retains successful immediate publications and their non-blocking warnings", async () => {
@@ -108,21 +109,32 @@ describe("publication failure boundaries", () => {
       createdAt: 1,
       status: "pending",
     });
-    const fetcher = publishMock(async () => json({ error: { code: 2 } }, 503));
+    let finalReached!: () => void;
+    const finalRequest = new Promise<void>((resolve) => {
+      finalReached = resolve;
+    });
+    const fetcher = publishMock(async () => {
+      finalReached();
+      return json({ error: { code: 2 } }, 503);
+    });
     vi.stubGlobal("fetch", fetcher);
-    const stop = startScheduler({
+    const options = {
       accounts: new JsonAccountStore(c.accountsFile, c.tokenEncryptionKey),
       scheduled,
       config: c,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      logger: { info() {}, warn() {}, error: vi.fn(), debug() {} },
       intervalMs: 10,
-    });
+    };
+    const stop = startScheduler(options);
     try {
-      await vi.waitFor(async () =>
-        expect((await scheduled.load())[0]?.status).toBe("uncertain"),
-      );
-      await new Promise((r) => setTimeout(r, 40));
+      await finalRequest;
+      // Join the worker, including its durable write, instead of racing disk speed.
+      await stop();
+      expect((await scheduled.load())[0]?.status).toBe("uncertain");
+      const nextStop = startScheduler(options);
+      await nextStop();
       expect(fetcher).toHaveBeenCalledTimes(4);
+      expect(options.logger.error).not.toHaveBeenCalled();
     } finally {
       await stop();
     }
